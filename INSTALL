@@ -1,0 +1,26 @@
+BASIC INSTALLATION
+
+The complete installation can be done by using the 'install' target in
+Makefile script.
+
+  1. 'cd' to the directory containing the source code and type,
+     'make install'.
+  2. Run 'bfc --version' to make sure bfc has been installed.
+  3. Run 'man bfc' to make sure the manual page has been installed.
+
+
+GENERATION MANUAL PAGE
+
+A manual page, bfc.1, is already provided in the source directory. On
+running the 'install' target of Makefile, this manual page is installed
+in /usr/local/man/man1/. This manual page was automatically generated
+using the output from 'bfc --help' and 'bfc --version'.
+
+To generate a new man page, after some modifications have been done in
+the help message or version text in the source code, the 'man' target
+may be run. Once, the new manual page has been generated, it may be
+installed using the 'install' target.
+
+  1. Run 'make man' to generate the man page, bfc.1, from the source.
+  2. Run 'make install' to compile the source, install bfc and the new
+     man page.

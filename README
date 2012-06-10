@@ -1,0 +1,19 @@
+bfc is a Brainfuck compiler written in C by Susam Pal <susam@susam.in>.
+It compiles Brainfuck code into machine code in ELF format for Linux
+running on Intel or AMD microprocessor. It generates assembly code in
+AT&T format and then uses GNU as and GNU ld programs to assemble and
+link it to generate the ELF executable code.
+
+Brainfuck is an esoteric programming language with only eight commands.
+More information on the language, its commands and sample programs can
+be found in the Wikipedia article: http://en.wikipedia.org/wiki/Brainfuck 
+
+Installation instructions can be found in the INSTALL file.
+
+This is free software. You are permitted to redistribute and use it in
+source and binary forms, with or without modification, under the terms
+of the New BSD License. See the LICENSE file for the complete license.
+
+This software is provided WITHOUT ANY WARRANTY; without even the implied
+warranties of MERCHANTIBILITY and FITNESS FOR A PARTICULAR PURPOSE. See
+the LICENSE file for more details.
