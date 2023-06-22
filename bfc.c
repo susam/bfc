@@ -6,7 +6,8 @@ Brainfuck compiler and interpreter.
 
 The MIT License (MIT)
 ---------------------
-Copyright (c) 2018-2018 Susam Pal
+
+Copyright (c) 2008-2023 Susam Pal
 
 Permission is hereby granted, free of charge, to any person obtaining
 a copy of this software and associated documentation files (the
@@ -30,376 +31,488 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <string.h>
+#include <stdarg.h>
 
 
 /** Version of the program. */
-#define VERSION     "0.2.0"
+#define VERSION "0.2.0-dev"
 
 /** Author of the program. */
 #define AUTHOR "Susam Pal"
 
 /** Copyright notice. */
-#define COPYRIGHT "Copyright (c) 2008-2018 " AUTHOR
+#define COPYRIGHT "Copyright (c) 2008-2023 " AUTHOR
 
 /** URL to a copy of the license. */
-#define LICENSE_URL "<https://github.com/susam/bfc/blob/master/LICENSE.md>"
+#define LICENSE_URL "<https://susam.github.io/licenses/mit.html>"
 
 /** URL to report issues to. */
 #define SUPPORT_URL "<https://github.com/susam/bfc/issues>"
 
-/** Maximum length of command line argument that is read. */
-#define MAX_ARG_LEN 16
+/** Maximum length of internal buffers. */
+#define MAX_BUF_LEN 64
 
-/** Maximum allowed length of an error message. */
-#define MAX_ERR_LEN 256
+/** Maximum length of compiler command. */
+#define MAX_CMD_LEN 256
 
-void compile(char *asm_filename, char *src_filename);
-char *string(char *str);
-char *replace_extension(char *name, char *ext);
-void help();
-void version();
 
-enum stage {
-    COMPILE,   /* Compile only */
-    ASSEMBLE,  /* Compile and assemble only */
-    LINK       /* Compile, assemble and link */
+/**
+Return name of the leaf directory or file in the specified path.
+
+Both backslash and forward slash are treated as path separators. A
+pointer to the beginning of the substring between the last slash
+(exclusive) and the end of the string is returned as the basename.
+Therefore if the specified path ends with a slash then an empty string
+is returned.
+
+@param path Path string.
+
+@return Name of the leaf directory or file in the specified path.
+*/
+const char *basename(const char *path)
+{
+    const char *base;
+    if ((base = strchr(path, '\\')) != NULL) {
+        return ++base;
+    } else if ((base = strchr(path, '/')) != NULL) {
+        return ++base;
+    } else {
+        return path;
+    }
+}
+
+
+/**
+Copy null-terminated byte string into a character array.
+
+@param dst Pointer to character array to copy the string to.
+@param src Pointer to null-terminated byte string to copy.
+@param count Maximum number of characters to copy.
+
+@return Destination string `dst`.
+*/
+char *strcp(char *dst, const char *src, size_t count)
+{
+    dst[0] = '\0';
+    strncat(dst, src, count - 1);
+    return dst;
+}
+
+
+/**
+Check if two null-terminated byte strings are equal.
+
+@param a Pointer to null-terminated byte string. (type: const char *)
+@param b Pointer to null-terminated byte string. (type: const char *)
+
+@return 1 if the two strings are equal; 0 otherwise.
+*/
+#define streq(a, b) (strcmp(a, b) == 0)
+
+
+/**
+Copy null-terminated byte string into a character array.
+
+@param a Pointer to null-terminated byte string. (type: char *)
+@param b Pointer to null-terminated byte string. (type: const char *)
+
+@return Destination byte string `a`.
+*/
+#define strcpz(a, b) (strcp(a, b, MAX_BUF_LEN))
+
+
+/**
+Values returned by a function to indicate success or failure.
+
+These return codes may be returned by a function to indicate success or
+failure of its operation as well as the next course of action.
+*/
+enum result {
+    GOOD, /**< Successful operation; program should continue. */
+    EXIT, /**< Successful operation; program should exit normally. */
+    FAIL  /**< Failed operation; program should exit with error. */
 };
 
-struct info_t {
-    char *pname;         /* Process name */
-    char *ifilename;     /* Input source code file name */
-    char *ofilename;     /* Output file name */
-    enum stage ostage;   /* Final stage that generates the output file */
-    char *arr_size;      /* Memory allocated for the executable */
-} info;
 
-/*
- * Parses the command line, sets the compile options, invokes the
- * functions and commands necessary to generate the output file.
- */
-int main(int argc, char **argv)
+/** Global metadata of the program. */
+struct meta {
+    char name[MAX_BUF_LEN];      /**< Program name. */
+    char debug;                  /**< Whether verbose mode is enabled. */
+    char compile;                /**< Whether to compile only. */
+    char compiler[MAX_BUF_LEN];  /**< Compiler command. */
+    char interpret;              /**< Whether interpreter mode is enabled. */
+    char src[MAX_BUF_LEN];       /**< Source filename. */
+    char icc[MAX_BUF_LEN + 2];   /**< Intermediate C code filename. */
+    char out[MAX_BUF_LEN];       /**< Output filename. */
+    char error[MAX_BUF_LEN];     /**< Error message. */
+} my;
+
+
+/**
+Show usage and help details of this program.
+*/
+void show_help(void)
 {
-    int verbose = 0;               /* 1 enables verbosity; 0 disables */
-    char *arr_size = "30000";      /* Default size of array of cells */
-    char *asm_filename;            /* File name for assembly code */
-    char *obj_filename;            /* File name for object code */
-    char *exe_filename = "a.out";  /* File name for executable code */
-    char *command;                 /* Buffer for command line strings */
-    size_t i;                      /* Counter */
-    size_t len;                    /* Stores string lengths */
+    const char *usage =
+        "Usage: %s [-d] [-c] [-i] [-o FILE] FILE\n\n";
 
-    /* Set default compile options */
-    if ((info.pname = strrchr(argv[0], '/')) == NULL) {
-        info.pname = argv[0];
-    } else {
-        info.pname++; /* Address of the basename part in argv[0] */
-    }
-    info.ifilename = NULL;
-    info.ofilename = NULL;
-    info.ostage = LINK; 
-    info.arr_size = arr_size;
+    const char *summary =
+        "Compile or interpret a Brainfuck program.\n\n";
 
-    /* Parse command line and set compile options */
-    for (i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-s") == 0) {
-            info.arr_size = argv[++i];
-        } else if (strcmp(argv[i], "-S") == 0 && info.ostage > COMPILE) {
-            info.ostage = COMPILE;
-        } else if (strcmp(argv[i], "-c") == 0 && info.ostage > ASSEMBLE) {
-            info.ostage = ASSEMBLE;
-        } else if (strcmp(argv[i], "-o") == 0) {
-            info.ofilename = argv[++i];
-        } else if (strcmp(argv[i], "-v") == 0 ||
-                   strcmp(argv[i], "--verbose") == 0) {
-            verbose = 1;
-        } else if (strcmp(argv[i], "--help") == 0 ||
-                   strcmp(argv[i], "-h") == 0) {
-            help();
-            exit(EXIT_SUCCESS);
-        } else if (strcmp(argv[i], "-V") == 0 ||
-                   strcmp(argv[i], "--version") == 0) {
-            version();
-            exit(EXIT_SUCCESS);
+    const char *options =
+        "Options:\n"
+        "  -c             Compile to C only; do not create executable.\n"
+        "  -d             Compile or interpret program verbosely.\n"
+        "  -o FILE        Write compiled executable to FILE.\n"
+        "  -s COMMAND     Command to compile generated C source.\n"
+        "  -i             Interpret program; do not compile.\n"
+        "  -h, --help     Show this help message and exit.\n"
+        "  -v, --version  Show version and exit.\n\n";
+
+    const char *footer =
+        "Report bugs to " SUPPORT_URL ".\n";
+
+    printf(usage, my.name);
+    printf("%s", summary);
+    printf("%s", options);
+    printf("%s", footer);
+}
+
+
+/**
+ * Show version and copyright details of this program.
+ */
+void show_version(void)
+{
+    const char *s =
+        "%s " VERSION "\n"
+        COPYRIGHT "\n\n"
+
+        "This is free and open source software. You can use, copy, modify,\n"
+        "merge, publish, distribute, sublicense, and/or sell copies of it,\n"
+        "under the terms of the MIT License. You can obtain a copy of the\n"
+        "MIT License at " LICENSE_URL ".\n\n"
+
+        "This software is provided \"AS IS\", WITHOUT WARRANTY OF ANY KIND,\n"
+        "express or implied. See the MIT License for details.\n";
+
+    printf(s, my.name);
+}
+
+
+/**
+Output message on the standard error stream.
+
+@param prefix Prefix string to add to the message.
+@param format Format string for printf.
+@param ...    Additional arguments.
+
+@return EXIT_FAILURE; the caller of this function may return this code
+        to indicate abnormal termination of the program.
+*/
+void msg(const char *prefix, const char *format, ...)
+{
+    va_list ap;
+    va_start(ap, format);
+    fprintf(stderr, "%s: ", prefix);
+    vfprintf(stderr, format, ap);
+    fprintf(stderr, "\n");
+    va_end(ap);
+}
+
+
+/**
+ * Replace extension in given name with given extension.
+ *
+ * @param dst Pointer to character array to write the result to.
+ * @param name Filename in which to replace extension.
+ * @param ext Extension.
+ */
+char *replace_ext(char *dst, const char *name, const char *ext) {
+    char *pos;
+    strcpz(dst, name);
+    pos = strrchr(dst, '.');
+    strcp(pos ? pos : dst + strlen(dst), ext, 3);
+    return dst;
+}
+
+
+/**
+Parse command line arguments.
+
+@param argc Argument count
+@param argv Argument vector
+
+@return Next action to take based on whether parsing of command line
+        arguments was successful or not.
+*/
+enum result parse_arguments(int argc, const char **argv)
+{
+    int i = 1;
+
+    /* Initialize metadata. */
+    strcp(my.name, basename(argv[0]), sizeof my.name);
+    my.debug = 0;
+    my.compile = 0;
+    my.compiler[0] = '\0';
+    my.interpret = 0;
+    my.src[0] = '\0';
+    my.icc[0] = '\0';
+    my.out[0] = '\0';
+    my.error[0] = '\0';
+
+    /* Parse command line arguments. */
+    while (i < argc) {
+        if (streq(argv[i], "-h") || streq(argv[i], "--help")) {
+            show_help();
+            return EXIT;
+        } else if (streq(argv[i], "-v") || streq(argv[i], "--version")) {
+            show_version();
+            return EXIT;
+        } else if (streq(argv[i], "-d")) {
+            my.debug = 1;
+            ++i;
+        } else if (streq(argv[i], "-c")) {
+            my.compile = 1;
+            ++i;
+        } else if (streq(argv[i], "-s")) {
+            if (i == argc - 1) {
+                strcpz(my.error, "Option -s requires compiler command");
+                return FAIL;
+            }
+            strcpz(my.compiler, argv[++i]);
+            ++i;
+        } else if (streq(argv[i], "-o")) {
+            if (i == argc - 1) {
+                strcpz(my.error, "Option -o requires filename or path");
+                return FAIL;
+            }
+            strcpz(my.out, argv[++i]);
+            ++i;
+        } else if (streq(argv[i], "-i")) {
+            my.interpret = 1;
+            ++i;
+        } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
+            strcpz(my.error, "Unknown option");
+            return FAIL;
+        } else if (my.src[0] == '\0') {
+            strcpz(my.src, argv[i]);
+            ++i;
         } else {
-            info.ifilename = argv[i];
+            strcpz(my.error, "Surplus source filename");
+            return FAIL;
         }
     }
 
-    /* If input source code file name is not specified, exit */
-    if (info.ifilename == NULL) {
-        fprintf(stderr, "%s: No input files\n", info.pname);
-        exit(EXIT_FAILURE);
+    if (my.debug) {
+        msg("debug", "interpret: %d", my.interpret);
+        msg("debug", "compile: %d", my.compile);
+        msg("debug", "compiler: %s", my.compiler);
+        msg("debug", "src: %s", my.src);
+        msg("debug", "out: %s", my.out);
     }
 
-    /*
-     * Phase 1: Compile
-     */
-
-    /* Determine name for assembly code filename */
-    if (info.ostage == COMPILE && info.ofilename != NULL) {
-        asm_filename = string(info.ofilename);
-    } else {
-        asm_filename = replace_extension(info.ifilename, "s"); 
+    /* Validate command line arguments. */
+    if (my.interpret && (my.compile || my.compiler[0] || my.out[0])) {
+        strcpz(my.error, "Option -i cannot be combined with -c, -s, or -o");
+        return FAIL;
+    }
+    if (!my.src[0]) {
+        strcpz(my.error, "Program filename must be specified");
+        return FAIL;
     }
 
-    /* Compile the source file into assembly file */
-    if (verbose) {
-        printf("Compiling: compile(\"%s\", \"%s\")\n",
-               asm_filename, info.ifilename);
-    }
-    compile(asm_filename, info.ifilename);
+    if (!my.interpret) {
+        /* Apply compiler defaults. */
+        if (my.compiler[0] == '\0') {
+            strcpz(my.compiler, "cc -std=c89 -O2 -Wall -Wextra -pedantic %s -o %s");
+        }
+        if (my.icc[0] == '\0') {
+            replace_ext(my.icc, my.src, ".c");
+        }
+        if (my.out[0] == '\0') {
+            replace_ext(my.out, my.src, "");
+        }
 
-    /* If compile only option was specified, exit */
-    if (info.ostage == COMPILE) {
-        free(asm_filename);
-        exit(EXIT_SUCCESS);
-    }
+        if (my.debug) {
+            msg("debug", "compiler: %s", my.compiler);
+            msg("debug", "files: %s => %s => %s", my.src, my.icc, my.out);
+        }
 
-    /*
-     * Phase 2: Assemble
-     */
-
-    /* Determine name for object code filename */
-    if (info.ostage == ASSEMBLE && info.ofilename != NULL) {
-        obj_filename = string(info.ofilename);
-    } else {
-        obj_filename = replace_extension(info.ifilename, "o"); 
-    }
-
-    /* Prepare command line for GNU as */
-    len = strlen("as -o") + strlen(asm_filename) +
-          strlen(obj_filename) + 2;
-    if ((command = malloc(len)) == NULL) {
-        fprintf(stderr, "%s: Out of memory while assembling", info.pname);
-    }
-    sprintf(command, "as -o %s %s", obj_filename, asm_filename);
-
-    /* Assemble the assembly code into object code */
-    if (verbose) {
-        printf("Assembling: %s\n", command);
-    }
-    system(command);
-    free(command);
-
-    /* Assembly code file is not required after assembling */
-    unlink(asm_filename);
-    free(asm_filename);
-
-    /* If compile and assemble only option was specified, exit */
-    if (info.ostage == ASSEMBLE) {
-        free(obj_filename);
-        exit(EXIT_SUCCESS);
+        /* Validate output filenames. */
+        if (streq(my.src, my.icc)) {
+            strcpz(my.error, "Source and intermediate filenames are same");
+            return FAIL;
+        }
+        if (streq(my.src, my.out)) {
+            strcpz(my.error, "Source and output filenames are same");
+            return FAIL;
+        }
     }
 
-    /*
-     * Phase 3: Link
-     */
-
-    /* Determine name for executable code filename */
-    if (info.ostage == LINK && info.ofilename != NULL) {
-        exe_filename = info.ofilename;
-    }
-
-    /* Prepare command line for GNU ld */
-    len = strlen("ld -o") + strlen(obj_filename) +
-          strlen(exe_filename) + 2;
-    if ((command = malloc(len)) == NULL) {
-        fprintf(stderr, "%s: Out of memory while compiling", info.pname);
-    }
-    sprintf(command, "ld -o %s %s", exe_filename, obj_filename);
-
-    /* Link the object code to executable code */
-    if (verbose) {
-        printf("Linking: %s\n", command);
-    }
-    system(command);
-    free(command);
-
-    /* Object code file is not required after linking */
-    unlink(obj_filename);
-    free(obj_filename);
-    
-    exit(EXIT_SUCCESS);
+    return GOOD;
 }
 
-/*
- * Copies the string pointed to by str into a new location and returns
- * the address of the new location where the string has been copied. The
- * caller of this function must free the pointer returned by this string
- * when the string is no longer required.
- */
-char *string(char *str) {
-    char *new_str;
-    if ((new_str = malloc(strlen(str) + 1)) == NULL) {
-        fprintf(stderr, "%s: Out of memory while allocating memory for "
-                        "string: %s\n", info.pname, str);
-        exit(1);
+
+/**
+Write a line of text to the given file.
+
+@param file   File to write to.
+@param indent Indentation level of the line.
+@param line   Line to write to the file.
+*/
+void write_text(FILE *file, unsigned indent, const char *line) {
+    unsigned i;
+    for (i = 0; i < 4 * indent; ++i) {
+        fprintf(file, " ");
     }
-    strcpy(new_str, str);
-    return new_str;
+    fprintf(file, "%s", line);
 }
 
-/*
- * Constructs a new string by replacing the extension name of the
- * filename pointed to by name with the extension name pointed to by
- * ext. If the filename has no extension name, the specified extension
- * name is appended to the filename. It returns the address of the new
- * string that has been constructed.
- */
-char *replace_extension(char *name, char *ext) {
-    char *dot = strrchr(name, '.');
-    char *new_name;
-    size_t len = dot == NULL ? strlen(name) : dot - name;
 
-    if ((new_name = malloc(len + strlen(ext) + 2)) == NULL) {
-        fprintf(stderr, "%s: Out of memory while changing extension of "
-                        "%s to %s\n", info.pname, name, ext);
-        exit(1);
+/**
+Compile source to intermediate C code.
+
+@return Next action to take based on the result of compilation.
+*/
+enum result compile(void)
+{
+    FILE *src_file;
+    FILE *icc_file;
+    char ch;
+    unsigned depth = 0;
+    unsigned line = 1;
+    unsigned col = 0;
+
+    if ((src_file = fopen(my.src, "r")) == NULL) {
+        strcpz(my.error, "Cannot open source file");
+        return FAIL;
     }
 
-    strncpy(new_name, name, len);
-    new_name[len] = '\0';
-    strcat(new_name, ".");
-    strcat(new_name, ext);
-    return new_name;
-}
-
-/*
- * Compiles the brainfuck source code present in src_filename into
- * assembly code in asm_filename.
- */
-void compile(char *asm_filename, char *src_filename) {
-
-    FILE *src;                      /* Source code file */
-    FILE *as;                       /* Assembly code file */
-    size_t *stack;                  /* Loop stack */
-    size_t top = 0;                 /* Next free location in stack */
-    size_t stack_size = STACK_SIZE; /* Stack size */
-    size_t loop = 0;                /* Used to generate loop labels */
-    int c;
-
-    /* Open source code file */
-    if ((src = fopen(src_filename, "r")) == NULL) {
-        fprintf(stderr, "%s: %s: Could not read file\n",
-                info.pname, src_filename);
-        exit(EXIT_FAILURE);
+    if ((icc_file = fopen(my.icc, "w")) == NULL) {
+        strcpz(my.error, "Cannot open intermediate file");
+        return FAIL;
     }
 
-    /* Open assembly code file */
-    if ((as = fopen(asm_filename, "w")) == NULL) {
-        fprintf(stderr, "%s: %s: Could not write file\n",
-                info.pname, asm_filename);
-        exit(EXIT_FAILURE);
-    }
-
-    /* Create loop stack */
-    if ((stack = malloc(stack_size * sizeof *stack)) == NULL) {
-        fprintf(stderr, "%s: Out of memory while creating loop stack "
-                        "of size %lu\n", info.pname, stack_size);
-        exit(EXIT_FAILURE);
-    }
-
-    /* Write assembly code */
-    fprintf(as, ".section .bss\n");
-    fprintf(as, "\t.lcomm buffer %s\n", info.arr_size);
-    fprintf(as, ".section .text\n");
-    fprintf(as, ".globl _start\n");
-    fprintf(as, "_start:\n");
-    fprintf(as, "\tmov $buffer, %%edi\n");
-    while ((c = fgetc(src)) != EOF) {
-        switch (c) {
-         case '>':
-            fprintf(as, "\tinc %%edi\n"); 
+    write_text(icc_file, depth++, "#include <stdio.h>\n\nint main()\n{\n");
+    write_text(icc_file, depth, "unsigned char cells[30000] = {0};\n");
+    write_text(icc_file, depth, "unsigned char *ptr = cells;\n");
+    while ((ch = fgetc(src_file)) != EOF) {
+        ++col;
+        switch (ch) {
+        case '>':
+            write_text(icc_file, depth, "++ptr;\n");
             break;
         case '<':
-            fprintf(as, "\tdec %%edi\n");
+            write_text(icc_file, depth, "--ptr;\n");
             break;
         case '+':
-            fprintf(as, "\tincb (%%edi)\n");
+            write_text(icc_file, depth, "++(*ptr);\n");
             break;
         case '-':
-            fprintf(as, "\tdecb (%%edi)\n");
-            break;
-        case ',':
-            fprintf(as, "\tmovl $3, %%eax\n");
-            fprintf(as, "\tmovl $0, %%ebx\n");
-            fprintf(as, "\tmovl %%edi, %%ecx\n");
-            fprintf(as, "\tmovl $1, %%edx\n");
-            fprintf(as, "\tint $0x80\n");
+            write_text(icc_file, depth, "--(*ptr);\n");
             break;
         case '.':
-            fprintf(as, "\tmovl $4, %%eax\n");
-            fprintf(as, "\tmovl $1, %%ebx\n");
-            fprintf(as, "\tmovl %%edi, %%ecx\n");
-            fprintf(as, "\tmovl $1, %%edx\n");
-            fprintf(as, "\tint $0x80\n");
+            write_text(icc_file, depth, "putchar(*ptr);\n");
             break;
         case '[':
-            if (top == stack_size) {
-                stack_size *= 1 + STACK_GROWTH_FACTOR;
-                if ((stack = realloc(stack,
-                                     sizeof *stack * stack_size)) == NULL) {
-                    fprintf(stderr, "%s: Out of memory while increasing "
-                                    "loop stack to size: %lu\n",
-                            info.pname, stack_size);
-                    exit(EXIT_FAILURE);
-                }
-            }
-            stack[top++] = ++loop;
-            fprintf(as, "\tcmpb $0, (%%edi)\n");
-            fprintf(as, "\tjz .LE%u\n", loop);
-            fprintf(as, ".LB%u:\n", loop);
+            write_text(icc_file, depth++, "while (*ptr) {\n");
             break;
         case ']':
-            fprintf(as, "\tcmpb $0, (%%edi)\n");
-            fprintf(as, "\tjnz .LB%u\n", stack[--top]);
-            fprintf(as, ".LE%u:\n", stack[top]);
+            if (depth <= 1) {
+                sprintf(my.error, "Unexpected ] at line %d col %d", line, col);
+                fclose(icc_file);
+                return FAIL;
+            }
+            write_text(icc_file, --depth, "}\n");
+            break;
+        case '\n':
+            ++line;
+            col = 0;
             break;
         }
     }
-    fprintf(as, "movl $1, %%eax\n");
-    fprintf(as, "movl $0, %%ebx\n");
-    fprintf(as, "int $0x80\n");
-
-    /* Close open files */
-    fclose(as);
-    fclose(src);
+    if (depth != 1) {
+        strcpz(my.error, "Unexpected end of file");
+        fclose(icc_file);
+        return FAIL;
+    }
+    write_text(icc_file, --depth, "}\n");
+    fclose(icc_file);
+    return GOOD;
 }
 
-/*
- * Displays help.
- */
-void help()
+
+/**
+Compile intermediate C code to executable file.
+
+@return Next action to take based on the result of compilation.
+*/
+enum result build(void)
 {
-    printf("Usage: %s [OPTION] ... FILE\n\n", info.pname);
-    printf("Options:\n");
-    printf("  " "-S             "
-           "Compile only; do not assemble or link\n");
-    printf("  " "-c             "
-           "Compile and assemble, but do not link\n");
-    printf("  " "-o FILE        "
-           "Place the output into FILE\n");
-    printf("  " "-s SIZE        "
-           "Size of the array of byte cells\n");
-    printf("  " "-v, --verbose  "
-           "Display functions and commands invoked\n");
-    printf("  " "-h, --help     "
-           "Display this help and exit\n");
-    printf("  " "-V, --version  "
-           "Output version information and exit\n");
-    printf("\n");
-    printf("Report bugs to <susam@susam.in>.\n");
+    char cmd[MAX_CMD_LEN];
+    int ret1;
+    int ret2;
+    sprintf(cmd, my.compiler, my.icc, my.out);
+    ret1 = system(cmd);
+    ret2 = remove(my.icc);
+    if (my.debug) {
+        msg("debug", "system() returned %d", ret1);
+        msg("debug", "remove() returned %d", ret2);
+    }
+    return GOOD;
 }
 
-/*
- * Displays version and copyright details.
- */
-void version()
+
+/**
+Interpret source code and run.
+
+@return Next action to take.
+*/
+enum result interpret(void)
 {
-    printf("%s " VERSION "\n", info.pname);
-    printf(COPYRIGHT "\n\n");
-    printf(LICENSE "\n\n");
-    printf("Written by " AUTHOR ".\n");
+    strcpz(my.error, "Interpreter BFI will soon be merged into this project");
+    return FAIL;
+}
+
+
+/**
+Start the program.
+
+@param argc Argument count.
+@param argv Argument vector.
+
+@return EXIT_SUCCESS if the program terminates normally;
+        EXIT_FAILURE if an error occurs.
+*/
+int main(int argc, const char **argv)
+{
+    enum result ret;
+    if ((ret = parse_arguments(argc, argv)) == FAIL) {
+        msg(my.name, my.error);
+        return EXIT_FAILURE;
+    } else if (ret == EXIT) {
+        return EXIT_SUCCESS;
+    }
+
+    if (my.interpret) {
+        if ((ret = interpret()) == FAIL) {
+            msg(my.name, my.error);
+            return EXIT_FAILURE;
+        }
+        return EXIT_SUCCESS;
+    }
+
+    if ((ret = compile()) == FAIL) {
+        msg(my.name, my.error);
+        return EXIT_FAILURE;
+    }
+
+    if ((ret = build()) == FAIL) {
+        msg(my.name, my.error);
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
 }
