@@ -204,18 +204,17 @@ void show_version(void)
 /**
 Output message on the standard error stream.
 
-@param prefix Prefix string to add to the message.
 @param format Format string for printf.
 @param ...    Additional arguments.
 
 @return EXIT_FAILURE; the caller of this function may return this code
         to indicate abnormal termination of the program.
 */
-void msg(const char *prefix, const char *format, ...)
+void msg(const char *format, ...)
 {
     va_list ap;
     va_start(ap, format);
-    fprintf(stderr, "%s: ", prefix);
+    fprintf(stderr, "%s: ", my.name);
     vfprintf(stderr, format, ap);
     fprintf(stderr, "\n");
     va_end(ap);
@@ -252,11 +251,11 @@ enum result parse_arguments(int argc, const char **argv)
     int i = 1;
 
     /* Initialize metadata. */
-    strcp(my.name, basename(argv[0]), sizeof my.name);
+    strcpz(my.name, basename(argv[0]));
     my.debug = 0;
     my.compile = 0;
     my.compiler[0] = '\0';
-    my.interpret = 0;
+    my.interpret = streq(my.name, "bfi") ? 1 : 0;
     my.src[0] = '\0';
     my.icc[0] = '\0';
     my.out[0] = '\0';
@@ -278,14 +277,14 @@ enum result parse_arguments(int argc, const char **argv)
             ++i;
         } else if (streq(argv[i], "-s")) {
             if (i == argc - 1) {
-                strcpz(my.error, "Option -s requires compiler command");
+                strcpz(my.error, "option -s requires compiler command");
                 return FAIL;
             }
             strcpz(my.compiler, argv[++i]);
             ++i;
         } else if (streq(argv[i], "-o")) {
             if (i == argc - 1) {
-                strcpz(my.error, "Option -o requires filename or path");
+                strcpz(my.error, "option -o requires filename or path");
                 return FAIL;
             }
             strcpz(my.out, argv[++i]);
@@ -294,32 +293,32 @@ enum result parse_arguments(int argc, const char **argv)
             my.interpret = 1;
             ++i;
         } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
-            strcpz(my.error, "Unknown option");
+            strcpz(my.error, "unknown option");
             return FAIL;
         } else if (my.src[0] == '\0') {
             strcpz(my.src, argv[i]);
             ++i;
         } else {
-            strcpz(my.error, "Surplus source filename");
+            strcpz(my.error, "surplus source filename");
             return FAIL;
         }
     }
 
     if (my.debug) {
-        msg("debug", "interpret: %d", my.interpret);
-        msg("debug", "compile: %d", my.compile);
-        msg("debug", "compiler: %s", my.compiler);
-        msg("debug", "src: %s", my.src);
-        msg("debug", "out: %s", my.out);
+        msg("interpret: %d", my.interpret);
+        msg("compile: %d", my.compile);
+        msg("compiler: %s", my.compiler);
+        msg("src: %s", my.src);
+        msg("out: %s", my.out);
     }
 
     /* Validate command line arguments. */
     if (my.interpret && (my.compile || my.compiler[0] || my.out[0])) {
-        strcpz(my.error, "Option -i cannot be combined with -c, -s, or -o");
+        strcpz(my.error, "option -i cannot be combined with -c, -s, or -o");
         return FAIL;
     }
     if (!my.src[0]) {
-        strcpz(my.error, "Program filename must be specified");
+        strcpz(my.error, "program filename must be specified");
         return FAIL;
     }
 
@@ -336,17 +335,17 @@ enum result parse_arguments(int argc, const char **argv)
         }
 
         if (my.debug) {
-            msg("debug", "compiler: %s", my.compiler);
-            msg("debug", "files: %s => %s => %s", my.src, my.icc, my.out);
+            msg("compiler: %s", my.compiler);
+            msg("files: %s => %s => %s", my.src, my.icc, my.out);
         }
 
         /* Validate output filenames. */
         if (streq(my.src, my.icc)) {
-            strcpz(my.error, "Source and intermediate filenames are same");
+            strcpz(my.error, "source and intermediate filenames are same");
             return FAIL;
         }
         if (streq(my.src, my.out)) {
-            strcpz(my.error, "Source and output filenames are same");
+            strcpz(my.error, "source and output filenames are same");
             return FAIL;
         }
     }
@@ -380,24 +379,25 @@ enum result compile(void)
 {
     FILE *src_file;
     FILE *icc_file;
-    char ch;
+    int ch;
     unsigned depth = 0;
     unsigned line = 1;
     unsigned col = 0;
 
     if ((src_file = fopen(my.src, "r")) == NULL) {
-        strcpz(my.error, "Cannot open source file");
+        strcpz(my.error, "cannot open source file");
         return FAIL;
     }
 
     if ((icc_file = fopen(my.icc, "w")) == NULL) {
-        strcpz(my.error, "Cannot open intermediate file");
+        strcpz(my.error, "cannot open intermediate file");
+        fclose(src_file);
         return FAIL;
     }
-
     write_text(icc_file, depth++, "#include <stdio.h>\n\nint main()\n{\n");
-    write_text(icc_file, depth, "unsigned char cells[30000] = {0};\n");
-    write_text(icc_file, depth, "unsigned char *ptr = cells;\n");
+    write_text(icc_file, depth, "unsigned char cell[30000] = {0};\n");
+    write_text(icc_file, depth, "unsigned char *ptr = cell;\n");
+    write_text(icc_file, depth, "int ch;\n");
     while ((ch = fgetc(src_file)) != EOF) {
         ++col;
         switch (ch) {
@@ -416,13 +416,18 @@ enum result compile(void)
         case '.':
             write_text(icc_file, depth, "putchar(*ptr);\n");
             break;
+        case ',':
+            write_text(icc_file, depth, "*ptr = (ch = getchar()) == EOF ? 0 : ch;");
+            break;
         case '[':
             write_text(icc_file, depth++, "while (*ptr) {\n");
             break;
         case ']':
             if (depth <= 1) {
-                sprintf(my.error, "Unexpected ] at line %d col %d", line, col);
+                sprintf(my.error, "unexpected ] at line %u col %u", line, col);
+                fclose(src_file);
                 fclose(icc_file);
+                remove(my.icc);
                 return FAIL;
             }
             write_text(icc_file, --depth, "}\n");
@@ -433,12 +438,17 @@ enum result compile(void)
             break;
         }
     }
+
     if (depth != 1) {
-        strcpz(my.error, "Unexpected end of file");
+        strcpz(my.error, "unexpected end of file");
+        fclose(src_file);
         fclose(icc_file);
+        remove(my.icc);
         return FAIL;
     }
+
     write_text(icc_file, --depth, "}\n");
+    fclose(src_file);
     fclose(icc_file);
     return GOOD;
 }
@@ -458,22 +468,164 @@ enum result build(void)
     ret1 = system(cmd);
     ret2 = remove(my.icc);
     if (my.debug) {
-        msg("debug", "system() returned %d", ret1);
-        msg("debug", "remove() returned %d", ret2);
+        msg("system() returned %d", ret1);
+        msg("remove() returned %d", ret2);
     }
     return GOOD;
 }
 
 
-/**
-Interpret source code and run.
+/** Stack size to keep jump locations for loops. */
+#define STACK_SIZE 256
 
-@return Next action to take.
+/** Context information about loop openings. */
+struct context {
+    fpos_t pos;      /**< Position of the opening of a loop in stream. */
+    unsigned line;   /**< Line number of source code. */
+    unsigned col;    /**< Column number of source code. */
+};
+
+
+/**
+Interpret and run source code.
+
+@return Next action to take based on the result of interpreter.
 */
 enum result interpret(void)
 {
-    strcpz(my.error, "Interpreter BFI will soon be merged into this project");
-    return FAIL;
+    unsigned char cell[30000] = {0};
+    unsigned char *ptr = cell;
+    FILE *src_file;
+    int ch;
+    unsigned skip_depth = 0;
+    unsigned line = 1;
+    unsigned col = 0;
+
+    struct context stack[STACK_SIZE];
+    unsigned top = 0;
+
+    if ((src_file = fopen(my.src, "r")) == NULL) {
+        strcpz(my.error, "cannot open source file");
+        return FAIL;
+    }
+
+    while ((ch = fgetc(src_file)) != EOF) {
+        ++col;
+        if (my.debug) {
+            msg("read %u:%u => %d (%c)", line, col, ch, ch);
+        }
+        switch (ch) {
+        case '>':
+            ++ptr;
+            if (my.debug) {
+                msg("incremented ptr to cell[%ld]", ptr - cell);
+            }
+            break;
+        case '<':
+            --ptr;
+            if (my.debug) {
+                msg("decremented ptr cell[%ld]", ptr - cell);
+            }
+            break;
+        case '+':
+            ++(*ptr);
+            if (my.debug) {
+                msg("incremented cell[%ld] to %u", ptr - cell, *ptr);
+            }
+            break;
+        case '-':
+            --(*ptr);
+            if (my.debug) {
+                msg("decremented cell[%ld] to %u", ptr - cell, *ptr);
+            }
+            break;
+        case '.':
+            putchar(*ptr);
+            if (my.debug) {
+                msg("printed cell[%ld] => %u (%c)", ptr - cell, *ptr, *ptr);
+            }
+            break;
+        case ',':
+            *ptr = (ch = getchar()) == EOF ? 0 : ch;
+            if (my.debug) {
+                msg("read into cell[%ld] => %u (%c)", ptr - cell, *ptr, *ptr);
+            }
+            break;
+        case '[':
+            if (*ptr == 0) {
+                /* Skip the loop. */
+                ++skip_depth;
+                while (skip_depth && (ch = fgetc(src_file)) != EOF) {
+                    ++col;
+                    if (ch == '[') {
+                        ++skip_depth;
+                    } else if (ch == ']') {
+                        --skip_depth;
+                    } else if (ch == '\n') {
+                        ++line;
+                    }
+                }
+                if (my.debug) {
+                    msg("skipped loop since cell[%ld] = %u", ptr - cell, *ptr);
+                }
+            } else if (top == STACK_SIZE) {
+                /* Report error if maximum loop depth is exceeded. */
+                sprintf(my.error, "loop nesting depth exceeds "
+                        "%u at line %u col %u", STACK_SIZE, line, col);
+                fclose(src_file);
+                return FAIL;
+            } else {
+                /* Save the pointer to the command after [. */
+                fgetpos(src_file, &(stack[top].pos));
+                stack[top].line = line;
+                stack[top].col = col;
+                ++top;
+                if (my.debug) {
+                    msg("saved %u:%u to stack[%u] since cell[%ld] = %u",
+                        line, col, top - 1, ptr - cell, *ptr);
+                }
+            }
+            break;
+        case ']':
+            if (top == 0) {
+                /* Report error if there is no open loop. */
+                sprintf(my.error, "unexpected ] at line %u col %u", line, col);
+                fclose(src_file);
+                return FAIL;
+            }
+            if (*ptr) {
+                /* Loop back to the command after the previous [. */
+                fsetpos(src_file, &(stack[top - 1].pos));
+                line = stack[top - 1].line;
+                col = stack[top - 1].col;
+                if (my.debug) {
+                    msg("looped to %u:%u from stack[%u] since cell[%ld] = %u",
+                        line, col, top - 1, ptr - cell, *ptr);
+                }
+            } else {
+                /* Forget the jump location of the loop being exited. */
+                --top;
+                if (my.debug) {
+                    msg("exited loop stack[%u] since cell[%ld] = %u",
+                        top, ptr - cell, *ptr);
+                }
+            }
+            break;
+        case '\n':
+            ++line;
+            col = 0;
+            break;
+        }
+    }
+    fclose(src_file);
+    if (skip_depth != 0 || top != 0) {
+        if (my.debug) {
+            msg("skip_depth = %u; top = %u\n", skip_depth, top);
+        }
+        strcpz(my.error, "unexpected end of file");
+        return FAIL;
+    }
+    return GOOD;
 }
 
 
@@ -490,7 +642,7 @@ int main(int argc, const char **argv)
 {
     enum result ret;
     if ((ret = parse_arguments(argc, argv)) == FAIL) {
-        msg(my.name, my.error);
+        msg("error: %s", my.error);
         return EXIT_FAILURE;
     } else if (ret == EXIT) {
         return EXIT_SUCCESS;
@@ -498,19 +650,19 @@ int main(int argc, const char **argv)
 
     if (my.interpret) {
         if ((ret = interpret()) == FAIL) {
-            msg(my.name, my.error);
+            msg("error: %s", my.error);
             return EXIT_FAILURE;
         }
         return EXIT_SUCCESS;
     }
 
     if ((ret = compile()) == FAIL) {
-        msg(my.name, my.error);
+        msg("error: %s", my.error);
         return EXIT_FAILURE;
     }
 
     if ((ret = build()) == FAIL) {
-        msg(my.name, my.error);
+        msg("error: %s", my.error);
         return EXIT_FAILURE;
     }
 
