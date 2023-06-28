@@ -155,7 +155,7 @@ Show usage and help details of this program.
 void show_help(void)
 {
     const char *usage =
-        "Usage: %s [-d] [-c] [-i] [-o FILE] FILE\n\n";
+        "Usage: %s [-d] [-c] [-o FILE] [-s COMMAND] [-i] [-h] [-v] FILE\n\n";
 
     const char *summary =
         "Compile or interpret a Brainfuck program.\n\n";
@@ -325,7 +325,7 @@ enum result parse_arguments(int argc, const char **argv)
     if (!my.interpret) {
         /* Apply compiler defaults. */
         if (my.compiler[0] == '\0') {
-            strcpz(my.compiler, "cc -std=c89 -O2 -Wall -Wextra -pedantic %s -o %s");
+            strcpz(my.compiler, "cc %s -o %s");
         }
         if (my.icc[0] == '\0') {
             replace_ext(my.icc, my.src, ".c");

@@ -10,11 +10,16 @@ bfi: bfc
 	rm -f bfi
 	cp bfc bfi
 
-debug: bfc.c
-	cc -g -std=c89 -Wall -Wextra -pedantic -o bfc bfc.c
+install:
+	mkdir -p /usr/local/bin/ /usr/local/share/man/man1/
+	cp bfc bfi /usr/local/bin/
+	cp bfc.1 /usr/local/share/man/man1/
 
 man: bfc
-	help2man ./$(PROJECT) -n "Brainfuck compiler" -N -o $(PROJECT).1
+	help2man ./bfc -n "Brainfuck Compiler and Interpreter" -N -o bfc.1
+
+debug: bfc.c
+	cc -g -std=c89 -Wall -Wextra -pedantic -o bfc bfc.c
 
 test: test-bfc-cli test-bfi-cli test-compiler test-interpreter test-programs
 	@echo PASS
