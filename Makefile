@@ -28,6 +28,7 @@ help:
 	@echo '  doc      Generate documentation of source code.'
 	@echo '  test     Run tests.'
 	@echo '  clean    Remove all generated files to clean current directory.'
+	@echo '  release  Print release checklist.'
 
 man: bfc
 	help2man ./bfc -n "Brainfuck Compiler and Interpreter" -N -o bfc.1
@@ -181,3 +182,12 @@ clean:
 	rm -rf latex/ html/ bfc.dSYM/
 	rm -f examples/a examples/cat examples/hello
 	rm -f out.txt
+
+release:
+	@echo 'Change version in bfc.c'
+	@echo 'make man'
+	@echo 'git add -p'
+	@echo 'VER='
+	@echo 'git commit -em "Set version to $VER"'
+	@echo 'git tag $VER -m "bfc $VER"'
+	@echo 'git push origin main $VER'
