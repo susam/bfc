@@ -1,25 +1,43 @@
 all: bfc bfi
 
 bfc: bfc.c
-	cc -g -std=c89 -Wall -Wextra -pedantic -o bfc bfc.c
+	cc -O2 -std=c89 -Wall -Wextra -pedantic -o bfc bfc.c
 
 bfi: bfc
-	# The 'rm' command prevents macOS from killing 'bfi' ran with the
-	# updated binary. See <https://apple.stackexchange.com/a/428388>
-	# for details.
 	rm -f bfi
 	cp bfc bfi
+
+# The 'rm' command above prevents macOS from killing 'bfi' ran with
+# the updated binary. See <https://apple.stackexchange.com/a/428388>
+# for details.
 
 install:
 	mkdir -p /usr/local/bin/ /usr/local/share/man/man1/
 	cp bfc bfi /usr/local/bin/
 	cp bfc.1 /usr/local/share/man/man1/
 
+help:
+	@echo 'Usage: make [target]'
+	@echo
+	@echo 'Targets:'
+	@echo '  bfc      Build the bfc binary executable.'
+	@echo '  bfi      Build the bfi binary executable.'
+	@echo '  install  Install bfc, bfi, and man page to /usr/local/'
+	@echo '  man      Build manual page.'
+	@echo '  dbg      Build bfc with debug information.'
+	@echo '  doc      Generate documentation of source code.'
+	@echo '  test     Run tests.'
+	@echo '  clean    Remove all generated files to clean current directory.'
+
 man: bfc
 	help2man ./bfc -n "Brainfuck Compiler and Interpreter" -N -o bfc.1
 
-debug: bfc.c
-	cc -g -std=c89 -Wall -Wextra -pedantic -o bfc bfc.c
+dbg: bfc.c
+	cc -g -O0 -std=c89 -Wall -Wextra -pedantic -o bfc bfc.c
+
+doc:
+	doxygen
+	@echo; echo 'Visit html/files.html to view documentation.'; echo
 
 test: test-bfc-cli test-bfi-cli test-compiler test-interpreter test-programs
 	@echo PASS
@@ -95,6 +113,7 @@ test-compiler: bfc
 	./bfc test.bf 2>&1 | grep -q 'bfc: error: unexpected end of file'
 	printf '[.]' > test.bf
 	./bfc -s 'echo %s %s' test.bf | grep -q '^test.c test'
+	rm -f test.bf test
 
 test-interpreter: bfi
 	# Exit status.
@@ -133,6 +152,7 @@ test-interpreter: bfi
 	./bfi test.bf 2>&1 | grep -q 'bfi: error: unexpected end of file'
 	printf '+++[-[-]' > test.bf
 	./bfi test.bf 2>&1 | grep -q 'bfi: error: unexpected end of file'
+	rm -f test.bf
 
 test-programs: bfc bfi
 	make test-cat
@@ -140,11 +160,13 @@ test-programs: bfc bfi
 	while read -r name; do \
 	  echo "Executing $$name.bf with compiler ..."; \
 	  ./bfc "$$name.bf" && "$$name" > out.txt && \
+	  rm -f "$$name" && \
 	  diff -u out.txt "$$name.txt" || exit 1; \
 	  echo "Executing $$name.bf with interpreter ..."; \
 	  ./bfi "$$name.bf" > out.txt && \
 	  diff -u out.txt "$$name.txt" || exit 1; \
 	done
+	rm -f out.txt
 
 test-cat:
 	./bfc examples/cat.bf
@@ -152,7 +174,10 @@ test-cat:
 	[ "$$(printf abc | ./bfi examples/cat.bf)" = "abc" ]
 	[ -z "$$(examples/cat < /dev/null)" ]
 	[ -z "$$(./bfi examples/cat.bf < /dev/null)" ]
+	rm -f examples/cat
 
 clean:
-	rm -rf latex/ html/
-	rm -f bfc
+	rm -f bfc bfi
+	rm -rf latex/ html/ bfc.dSYM/
+	rm -f examples/a examples/cat examples/hello
+	rm -f out.txt

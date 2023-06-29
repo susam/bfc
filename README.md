@@ -18,14 +18,14 @@ Get Started
 If there is a C compiler available on a Unix or Linux system, the
 easiest way to build and install this project is:
 
-```
+```sh
 make
 sudo make install
 ```
 
 Then this project may be run as follows:
 
-```
+```sh
 echo '++++++++[>++++++++<-]>+.[-]++++++++++.' > a.bf
 bfc a.bf && ./a
 bfi a.bf
@@ -45,11 +45,13 @@ bfi --help
 man bfc
 ```
 
-Note that the binaries `bfc` and `bfi` are identical. When these
-executables are run, the running executable program checks its own
-name. If it turns out to be `bfi` it runs in interpreter mode.
-Otherwise, it runs in compiler mode. The command `bfi` is equivalent
-to `bfc -i` which runs `bfc` in interpreter mode.
+Note that the binaries `bfc` and `bfi` are identical. When `bfc` or
+`bfi` is run, the running process first checks its own process name.
+If it turns out to be `bfi` it runs in interpreter mode. Otherwise, it
+runs in compiler mode. Also, note that `bfi` is equivalent to `bfc
+-i`, so while the `bfc` command without the `-i` option runs in
+compiler mode, the `bfc -i` and `bfi` commands run in interpreter
+mode.
 
 
 License
